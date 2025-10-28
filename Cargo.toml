@@ -1,0 +1,10 @@
+[package]
+name = "rs-rtmp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rtmp = { path = "./crates/rtmp" }
+
+[workspace]
+members = ["crates/*"]
