@@ -1,40 +1,31 @@
-pub mod read;
-pub mod types;
+pub mod constants;
+
+mod number;
+mod object;
+mod string;
 mod value;
 
+pub use number::AmfNumber;
+pub use object::AmfObject;
+pub use string::AmfString;
 pub use value::Value;
 
 #[cfg(test)]
 mod tests {
-    use std::io::BufReader;
-
-    use crate::amf0::read::read_string;
-
     use super::*;
 
     #[test]
-    fn test_read_string() {
-        let mut data: &[u8] = &[0x00, 0x04, 0x4d, 0x69, 0x6b, 0x65];
-
-        let mut reader = BufReader::new(&mut data);
-        let v = read_string(&mut reader).unwrap();
-
-        assert_eq!(v, String::from("Mike"));
-    }
-
-    #[test]
     fn test_value_read_string() {
-        let mut data: &[u8] = &[0x02, 0x00, 0x04, 0x4d, 0x69, 0x6b, 0x65];
+        let data: &[u8] = &[0x02, 0x00, 0x04, 0x4d, 0x69, 0x6b, 0x65];
 
-        let mut reader = BufReader::new(&mut data);
-        let v = Value::read(&mut reader).unwrap();
+        let value = Value::deserialize(&mut data.iter().copied()).unwrap();
 
-        assert_eq!(v, Value::String(String::from("Mike")));
+        assert_eq!(value.as_string().unwrap().as_str(), "Mike");
     }
 
     #[test]
     fn test_value_read_object() {
-        let mut data: &[u8] = &[
+        let data: &[u8] = &[
             0x03, // Object
             0x00, 0x04, 0x6e, 0x61, 0x6d, 0x65, // Key "name"
             0x02, 0x00, 0x04, 0x4d, 0x69, 0x6b, 0x65, // String
@@ -46,28 +37,34 @@ mod tests {
             0x09, // Object end
         ];
 
-        let mut reader = BufReader::new(&mut data);
-        let v = Value::read(&mut reader).unwrap();
+        let v = Value::deserialize(&mut data.iter().copied()).unwrap();
 
         println!("{v:#?}");
     }
 
     #[test]
     fn test_read_seq() {
-        let mut data: &[u8] = &[
+        let data: &[u8] = &[
             0x02, 0x00, 0x0C, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x53, 0x74, 0x72, 0x65, 0x61,
             0x6D, // String
             0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Number
             0x05, // Null
         ];
 
-        let mut reader = BufReader::new(&mut data);
+        let mut iter = data.iter().copied();
 
         assert_eq!(
-            Value::read(&mut reader).unwrap(),
-            Value::String(String::from("createStream"))
+            Value::deserialize(&mut iter)
+                .unwrap()
+                .as_string()
+                .unwrap()
+                .as_str(),
+            "createStream"
         );
-        assert_eq!(Value::read(&mut reader).unwrap(), Value::Number(2.0));
-        assert_eq!(Value::read(&mut reader).unwrap(), Value::Null);
+        assert_eq!(
+            Value::deserialize(&mut iter).unwrap().as_number().unwrap(),
+            2.0
+        );
+        assert_eq!(Value::deserialize(&mut iter).unwrap(), Value::Null);
     }
 }

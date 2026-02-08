@@ -1,10 +1,27 @@
 [package]
-name = "rs-rtmp"
+name = "rtmp-rs"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 rtmp = { path = "./crates/rtmp" }
+amf = { path = "./crates/amf" }
+anyhow = { version = "1.0.101", default-features = false, features = ["std", "backtrace"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+
+[lints]
+workspace = true
 
 [workspace]
-members = ["crates/*"]
+members = [".", "crates/*"]
+default-members = [".", "crates/*"]
+
+[workspace.lints.clippy]
+print_stdout = "warn"
+unwrap_used = "warn"
+
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+new_without_default = "allow"

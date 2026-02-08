@@ -5,4 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
+itertools = "0.14.0"
 
+[lints]
+workspace = true

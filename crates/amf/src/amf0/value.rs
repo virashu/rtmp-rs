@@ -1,16 +1,13 @@
-use std::{collections::HashMap, io::BufRead};
+use anyhow::{Context, Result, anyhow};
 
-use crate::amf0::{
-    read::{read_number, read_object, read_string},
-    types,
-};
+use crate::amf0::{AmfObject, constants::types, number::AmfNumber, string::AmfString};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
-    Number(f64),
+    Number(AmfNumber),
     Boolean(bool),
-    String(String),
-    Object(HashMap<String, Value>),
+    String(AmfString),
+    Object(AmfObject),
     Null,
     EcmaArray,
     ObjectEnd,
@@ -23,18 +20,69 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn read(stream: &mut impl BufRead) -> anyhow::Result<Self> {
-        let mut type_buf: [u8; 1] = [0];
-        stream.read_exact(&mut type_buf[..1])?;
+    /// Detect type and deserialize value
+    pub fn deserialize(iter: &mut impl Iterator<Item = u8>) -> Result<Self> {
+        let value_type = iter.next().context("")?;
 
-        match type_buf[0] {
-            types::NUMBER => read_number(stream).map(Self::Number),
-            types::STRING => read_string(stream).map(Self::String),
-            types::OBJECT => read_object(stream).map(Self::Object),
+        match value_type {
+            types::NUMBER => AmfNumber::deserialize(iter).map(Self::Number),
+            types::STRING => AmfString::deserialize(iter).map(Self::String),
+            types::OBJECT => AmfObject::deserialize(iter).map(Self::Object),
             types::NULL => Ok(Self::Null),
             types::OBJECT_END => Ok(Self::ObjectEnd),
 
             t => Err(anyhow::anyhow!("Unhandled type: {t}")),
+        }
+    }
+
+    pub fn serialize(&self) -> Box<[u8]> {
+        let mut buf = Vec::new();
+
+        match self {
+            Self::Number(value) => {
+                buf.push(types::NUMBER);
+                buf.extend(value.serialize());
+            }
+            Self::String(value) => {
+                buf.push(types::STRING);
+                buf.extend(value.serialize());
+            }
+            Self::Object(value) => {
+                buf.push(types::OBJECT);
+                buf.extend(value.serialize());
+            }
+            Self::Null => {
+                buf.push(types::NULL);
+            }
+
+            _ => todo!(),
+        }
+
+        buf.into_boxed_slice()
+    }
+
+    //
+    // Conversions
+    //
+
+    pub fn as_string(&self) -> Result<AmfString> {
+        match self {
+            Self::String(value) => Ok(value.clone()),
+            _ => Err(anyhow!("Type mismatch")),
+        }
+    }
+
+    pub fn as_number(&self) -> Result<AmfNumber> {
+        match self {
+            Self::Number(value) => Ok(value.clone()),
+            _ => Err(anyhow!("Type mismatch")),
+        }
+    }
+
+    pub fn as_object(&self) -> Result<AmfObject> {
+        match self {
+            Self::Object(value) => Ok(value.clone()),
+            _ => Err(anyhow!("Type mismatch")),
         }
     }
 }

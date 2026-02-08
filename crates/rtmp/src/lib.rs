@@ -1,7 +1,6 @@
-#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
-
-pub mod header;
+pub mod chunk;
+pub mod constant;
+pub mod message;
 pub mod message_type;
-pub mod packet;
 
 mod util;

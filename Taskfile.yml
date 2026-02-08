@@ -1,0 +1,8 @@
+version: "3"
+
+tasks:
+  run:
+    cmd: cargo run
+    env:
+      RUST_BACKTRACE: 1
+      RUST_LIB_BACKTRACE: 1
