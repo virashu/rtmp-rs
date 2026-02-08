@@ -8,7 +8,7 @@ use anyhow::{Result, bail, ensure};
 use tracing::{debug, info};
 
 use amf::amf0::{AmfNumber, AmfObject, AmfString, Value};
-use rtmp::{chunk::Chunk, connection::Connection, message_type::MessageType};
+use rtmp::{connection::Connection, message::Message, message_type::MessageType};
 
 fn get_timestamp_u32() -> u32 {
     SystemTime::now()
@@ -67,6 +67,9 @@ fn handshake(stream: &mut TcpStream) -> Result<()> {
 }
 
 fn connect(stream: &mut TcpStream) -> Result<()> {
+    const CONTROL_CHUNK_STREAM_ID: u32 = 2;
+    const CONTROL_MESSAGE_STREAM_ID: u32 = 0;
+
     let _span = tracing::info_span!("connect").entered();
     let mut conn = Connection::new(stream);
 
@@ -82,8 +85,6 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
     // IN: `Command Message (connect)`
     {
         let msg = conn.recv()?;
-        debug!(?msg.header);
-
         let mut iter = msg.payload.iter().copied();
 
         let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
@@ -98,30 +99,26 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
 
     // OUT: `Window Acknowledgement Size`
     {
-        #[rustfmt::skip]
-        let window_acknowledgement_size = [
-            0x02, // Basic header (full message header / 12 Bytes)
-            0x00, 0x00, 0x00, // Timestamp (ignored)
-            0x00, 0x00, 0x04, // Length (4 Bytes)
-            MessageType::WindowAcknowledgementSize as u8, // Type
-            0x00, 0x00, 0x00, 0x00, // Stream ID
-            0x00, 0x00, 0x01, 0x00, // Payload
-        ];
-        conn.send_raw(&window_acknowledgement_size)?;
+        let msg = Message::new(
+            MessageType::WindowAcknowledgementSize,
+            0, // Ignored
+            CONTROL_MESSAGE_STREAM_ID,
+            &[0x01, 0x00, 0x00, 0x00],
+        )?;
+
+        conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
     }
 
     // OUT: `Set Peer Bandwidth`
     {
-        #[rustfmt::skip]
-        let set_peer_bandwidth = [
-            0x02, // Basic header (full message header / 12 Bytes)
-            0x00, 0x00, 0x00, // Timestamp (ignored)
-            0x00, 0x00, 0x05, // Length (5 Bytes)
-            MessageType::SetPeerBandwidth as u8, // Type
-            0x00, 0x00, 0x00, 0x00, // Stream ID
-            0x00, 0x00, 0x01, 0x00, 0x00, // Payload
-        ];
-        conn.send_raw(&set_peer_bandwidth)?;
+        let msg = Message::new(
+            MessageType::SetPeerBandwidth,
+            0, // Ignored
+            CONTROL_MESSAGE_STREAM_ID,
+            &[0x01, 0x00, 0x00, 0x00, 0x00],
+        )?;
+
+        conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
     }
 
     // IN: `Window Acknowledgement Size`
@@ -132,17 +129,17 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
 
     // OUT: `User Control Message (StreamBegin)`
     {
-        #[rustfmt::skip]
-        let user_control_message = [
-            0x02, // Basic header (full message header / 12 Bytes)
-            0x00, 0x00, 0x00, // Timestamp (ignored)
-            0x00, 0x00, 0x05, // Length (5 Bytes)
-            MessageType::UserControlMessage as u8, // Type
-            0x00, 0x00, 0x00, 0x00, // Stream ID
-            0x00, 0x00, // Event (= `StreamBegin`)
-            0x00, 0x00, 0x11, 0x11, // Event data
-        ];
-        conn.send_raw(&user_control_message)?;
+        let msg = Message::new(
+            MessageType::UserControlMessage,
+            0, // Ignored
+            CONTROL_MESSAGE_STREAM_ID,
+            &[
+                0x00, 0x00, // Event (= `StreamBegin`)
+                0x00, 0x00, 0x11, 0x11, // Event Data
+            ],
+        )?;
+
+        conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
     }
 
     // OUT: `Command Message(_result - connect response)`
@@ -153,24 +150,19 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
         payload.extend(
             &Value::Object(AmfObject::new([(
                 String::from("flashVer"),
-                Value::String(AmfString::new("FMLE/3.0 (compatible; FMSc/1.0)")?),
+                Value::try_from("FMLE/3.0 (compatible; FMSc/1.0)")?,
             )])?)
             .serialize(),
         );
         payload.extend(&Value::Object(AmfObject::new([])?).serialize());
 
-        let len = &payload.len().to_be_bytes()[5..8];
-
-        #[rustfmt::skip]
-        let user_control_message_header = [
-            0x02, // Basic header (full message header / 12 Bytes)
-            0x00, 0x00, 0x00, // Timestamp (ignored)
-            len[0], len[1], len[2], // Length
-            MessageType::Command as u8, // Type
-            0x00, 0x00, 0x00, 0x00, // Stream ID
-        ];
-        conn.send_raw(&user_control_message_header)?;
-        conn.send_raw(&payload)?;
+        let msg = Message::new(
+            MessageType::Command,
+            0, // Ignored
+            CONTROL_MESSAGE_STREAM_ID,
+            &payload,
+        )?;
+        conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
     }
 
     // Listen for any messages

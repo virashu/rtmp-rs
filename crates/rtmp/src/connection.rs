@@ -7,7 +7,11 @@ use std::{
 use anyhow::Result;
 
 use crate::{
-    chunk::{ChunkingState, header::ChunkHeader, make_message_header},
+    chunk::{
+        ChunkingState,
+        header::{ChunkBasicHeader, ChunkHeader, ChunkHeaderType, ChunkMessageHeader},
+        make_message_header,
+    },
     message::Message,
 };
 
@@ -44,5 +48,27 @@ impl<'s> Connection<'s> {
 
     pub fn send_raw(&mut self, buf: &[u8]) -> Result<()> {
         Ok(self.stream.write_all(buf)?)
+    }
+
+    pub fn send(&mut self, chunk_stream_id: u32, message: Message) -> Result<()> {
+        // TODO: Optimize
+        // Sending full header for now
+        let chunk_header = ChunkHeader {
+            basic_header: ChunkBasicHeader {
+                chunk_header_type: ChunkHeaderType::Type0,
+                chunk_stream_id,
+            },
+            message_header: ChunkMessageHeader {
+                timestamp: Some(message.header.timestamp),
+                message_length: Some(message.header.payload_length),
+                message_type: Some(message.header.message_type),
+                message_stream_id: Some(message.header.stream_id),
+            },
+        };
+
+        self.send_raw(&chunk_header.serialize())?;
+        self.send_raw(&message.payload)?;
+
+        Ok(())
     }
 }

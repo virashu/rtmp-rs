@@ -9,9 +9,13 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ChunkHeaderType {
+    /// Full: `timestamp`, `message_length`, `message_type`, `message_stream_id`
     Type0,
+    /// Without stream id: `timestamp`, `message_length`, `message_type`
     Type1,
+    /// Only `timestamp`
     Type2,
+    /// Empty
     Type3,
 }
 
@@ -56,6 +60,24 @@ impl ChunkBasicHeader {
             chunk_header_type,
             chunk_stream_id,
         })
+    }
+}
+
+/// Serialize/Deserialize implementation
+impl ChunkBasicHeader {
+    pub fn serialize(&self) -> Box<[u8]> {
+        if self.chunk_stream_id > 63 {
+            todo!("Chunk stream ID is to big to be stored in 6 bits")
+        }
+
+        let chunk_header_type_bits = match self.chunk_header_type {
+            ChunkHeaderType::Type0 => 0b00,
+            ChunkHeaderType::Type1 => 0b01,
+            ChunkHeaderType::Type2 => 0b10,
+            ChunkHeaderType::Type3 => 0b11,
+        };
+
+        Box::new([(self.chunk_stream_id as u8) | (chunk_header_type_bits << 6)])
     }
 }
 
@@ -156,12 +178,41 @@ impl ChunkMessageHeader {
     }
 }
 
+/// Serialize/Deserialize implementation
+impl ChunkMessageHeader {
+    pub fn serialize(&self) -> Box<[u8]> {
+        let mut buf = Vec::new();
+
+        if let Some(timestamp) = self.timestamp {
+            let bytes = timestamp.to_be_bytes();
+            buf.extend(&bytes[1..4]);
+        }
+
+        if let Some(message_length) = self.message_length {
+            let bytes = message_length.to_be_bytes();
+            buf.extend(&bytes[1..4]);
+        }
+
+        if let Some(message_type) = self.message_type {
+            buf.push(message_type as u8);
+        }
+
+        if let Some(message_stream_id) = self.message_stream_id {
+            let bytes = message_stream_id.to_be_bytes();
+            buf.extend(&bytes);
+        }
+
+        buf.into_boxed_slice()
+    }
+}
+
 #[derive(Debug)]
 pub struct ChunkHeader {
     pub basic_header: ChunkBasicHeader,
     pub message_header: ChunkMessageHeader,
 }
 
+/// Read/Write implementation
 impl ChunkHeader {
     pub fn read_from(stream: &mut impl Read) -> Result<Self> {
         let basic_header = ChunkBasicHeader::read_from(stream)?;
@@ -179,6 +230,18 @@ impl ChunkHeader {
             basic_header,
             message_header,
         })
+    }
+}
+
+/// Serialize/Deserialize implementation
+impl ChunkHeader {
+    pub fn serialize(&self) -> Box<[u8]> {
+        let mut buf = Vec::new();
+
+        buf.extend(self.basic_header.serialize());
+        buf.extend(self.message_header.serialize());
+
+        buf.into_boxed_slice()
     }
 }
 

@@ -86,3 +86,27 @@ impl Value {
         }
     }
 }
+
+// From
+
+impl TryFrom<&str> for Value {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Ok(Self::String(AmfString::try_from(value)?))
+    }
+}
+
+impl TryFrom<String> for Value {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Ok(Self::String(AmfString::try_from(value)?))
+    }
+}
+
+impl From<AmfString> for Value {
+    fn from(value: AmfString) -> Self {
+        Self::String(value)
+    }
+}

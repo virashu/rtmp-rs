@@ -44,3 +44,19 @@ impl std::fmt::Display for AmfString {
         write!(f, "{}", self.0)
     }
 }
+
+impl TryFrom<&str> for AmfString {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<String> for AmfString {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
