@@ -22,7 +22,7 @@ pub enum Value {
 impl Value {
     /// Detect type and deserialize value
     pub fn deserialize(iter: &mut impl Iterator<Item = u8>) -> Result<Self> {
-        let value_type = iter.next().context("")?;
+        let value_type = iter.next().context("Not enough items")?;
 
         match value_type {
             types::NUMBER => AmfNumber::deserialize(iter).map(Self::Number),
