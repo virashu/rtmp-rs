@@ -8,7 +8,13 @@ use anyhow::{Result, bail, ensure};
 use tracing::{debug, info};
 
 use amf::amf0::{AmfNumber, AmfObject, AmfString, Value};
-use rtmp::{connection::Connection, message::Message, message_type::MessageType};
+use rtmp::{
+    connection::Connection,
+    constants::{CONTROL_CHUNK_STREAM_ID, CONTROL_MESSAGE_STREAM_ID},
+    event::UserControlMessageEvent,
+    message::{Message, control_message},
+    message_type::MessageType,
+};
 
 fn get_timestamp_u32() -> u32 {
     SystemTime::now()
@@ -67,20 +73,17 @@ fn handshake(stream: &mut TcpStream) -> Result<()> {
 }
 
 fn connect(stream: &mut TcpStream) -> Result<()> {
-    const CONTROL_CHUNK_STREAM_ID: u32 = 2;
-    const CONTROL_MESSAGE_STREAM_ID: u32 = 0;
-
     let _span = tracing::info_span!("connect").entered();
     let mut conn = Connection::new(stream);
 
     // IN: `Set Chunk Size`
-    {
-        let msg = conn.recv()?;
-        let raw_value: [u8; 4] = msg.payload.as_ref().try_into()?;
-        let value = u32::from_be_bytes(raw_value);
+    // {
+    //     let msg = conn.recv()?;
+    //     let raw_value: [u8; 4] = msg.payload.as_ref().try_into()?;
+    //     let value = u32::from_be_bytes(raw_value);
 
-        info!("The client set a chunk size limit: {value} Bytes");
-    }
+    //     info!("The client set a chunk size limit: {value} Bytes");
+    // }
 
     // IN: `Command Message (connect)`
     {
@@ -91,7 +94,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
         ensure!(command == "connect", "Unexpected command");
 
         let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
-        ensure!(transmission_id == 1.0, "Unexpected command");
+        ensure!(transmission_id == 1.0, "Unexpected transmission ID");
 
         let args = Value::deserialize(&mut iter)?.as_object()?.to_hashmap();
         debug!(?args);
@@ -99,25 +102,13 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
 
     // OUT: `Window Acknowledgement Size`
     {
-        let msg = Message::new(
-            MessageType::WindowAcknowledgementSize,
-            0, // Ignored
-            CONTROL_MESSAGE_STREAM_ID,
-            &[0x01, 0x00, 0x00, 0x00],
-        )?;
-
+        let msg = control_message::window_acknowledgement_size(0x10000);
         conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
     }
 
     // OUT: `Set Peer Bandwidth`
     {
-        let msg = Message::new(
-            MessageType::SetPeerBandwidth,
-            0, // Ignored
-            CONTROL_MESSAGE_STREAM_ID,
-            &[0x01, 0x00, 0x00, 0x00, 0x00],
-        )?;
-
+        let msg = control_message::set_peer_bandwidth(0x10000, 0);
         conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
     }
 
@@ -129,22 +120,17 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
 
     // OUT: `User Control Message (StreamBegin)`
     {
-        let msg = Message::new(
-            MessageType::UserControlMessage,
-            0, // Ignored
-            CONTROL_MESSAGE_STREAM_ID,
-            &[
-                0x00, 0x00, // Event (= `StreamBegin`)
-                0x00, 0x00, 0x11, 0x11, // Event Data
-            ],
+        let msg = control_message::user_control_message(
+            UserControlMessageEvent::StreamBegin,
+            &[0x00, 0x00, 0x11, 0x11],
         )?;
-
         conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
     }
 
     // OUT: `Command Message(_result - connect response)`
     {
         let mut payload = Vec::<u8>::new();
+
         payload.extend(&Value::String(AmfString::new("_result")?).serialize());
         payload.extend(&Value::Number(AmfNumber::new(1.0)).serialize());
         payload.extend(
@@ -154,7 +140,28 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             )])?)
             .serialize(),
         );
-        payload.extend(&Value::Object(AmfObject::new([])?).serialize());
+        payload.extend(
+            &Value::Object(AmfObject::new([
+                (String::from("level"), Value::try_from("status")?),
+                (
+                    String::from("code"),
+                    Value::try_from("NetConnection.Connect.Success")?,
+                ),
+                (
+                    String::from("description"),
+                    Value::try_from("Connection succeeded")?,
+                ),
+                (
+                    String::from("clientId"),
+                    Value::Number(AmfNumber::new(1337.0)),
+                ),
+                (
+                    String::from("objectEncoding"),
+                    Value::Number(AmfNumber::new(0.0)),
+                ),
+            ])?)
+            .serialize(),
+        );
 
         let msg = Message::new(
             MessageType::Command,

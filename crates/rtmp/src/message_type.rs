@@ -1,37 +1,6 @@
-macro_rules! auto_try_from_u8 {
-    (
-        $(#[$meta:meta])*
-        $vis:vis enum $name:ident {
-            $(
-                $(#[$vmeta:meta])*
-                $vname:ident $(= $val:expr)?
-            ),*
-        }
-    ) => {
-        $(#[$meta])*
-        $vis enum $name {
-            $(
-                $(#[$vmeta])*
-                $vname $(= $val)?
-            ),*
-        }
+use crate::macros::primitive_enum;
 
-        impl std::convert::TryFrom<u8> for $name {
-            type Error = anyhow::Error;
-
-            fn try_from(v: u8) -> Result<Self, Self::Error> {
-                match v {
-                    $(
-                        x if x == $name::$vname as u8 => Ok($name::$vname),
-                    )*
-                    _ => Err(anyhow::anyhow!("Unknown value: 0x{v:x}")),
-                }
-            }
-        }
-    }
-}
-
-auto_try_from_u8! {
+primitive_enum! {
     #[repr(u8)]
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum MessageType {
@@ -63,6 +32,6 @@ auto_try_from_u8! {
         Command,
         Udp,
         Aggregate,
-        Present
+        Present,
     }
 }
