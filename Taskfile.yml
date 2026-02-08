@@ -1,8 +1,15 @@
 version: "3"
 
+vars:
+  RTMP_ADDR: 127.0.0.1:1935/ada/instance
+  TEST_FILE: tests/resources/test.mp4
+
 tasks:
   run:
     cmd: cargo run
     env:
       RUST_BACKTRACE: 1
       RUST_LIB_BACKTRACE: 1
+
+  ffmpeg: ffmpeg -re -stream_loop -1 -i {{ .TEST_FILE }} -c copy -f flv rtmp://{{ .RTMP_ADDR }}
+  # -c:v libx264 -c:a aac
