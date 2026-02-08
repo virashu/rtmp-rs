@@ -33,7 +33,7 @@ macro_rules! auto_try_from_u8 {
 
 auto_try_from_u8! {
     #[repr(u8)]
-    #[derive(Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum MessageType {
         //
         // Protocol Control Messages

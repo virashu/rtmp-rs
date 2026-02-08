@@ -62,7 +62,11 @@ mod tests {
             "createStream"
         );
         assert_eq!(
-            Value::deserialize(&mut iter).unwrap().as_number().unwrap(),
+            Value::deserialize(&mut iter)
+                .unwrap()
+                .as_number()
+                .unwrap()
+                .to_float(),
             2.0
         );
         assert_eq!(Value::deserialize(&mut iter).unwrap(), Value::Null);

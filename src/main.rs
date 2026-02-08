@@ -8,7 +8,7 @@ use anyhow::{Result, bail, ensure};
 use tracing::{debug, info};
 
 use amf::amf0::{AmfNumber, AmfObject, AmfString, Value};
-use rtmp::{chunk::Chunk, message_type::MessageType};
+use rtmp::{chunk::Chunk, connection::Connection, message_type::MessageType};
 
 fn get_timestamp_u32() -> u32 {
     SystemTime::now()
@@ -68,11 +68,12 @@ fn handshake(stream: &mut TcpStream) -> Result<()> {
 
 fn connect(stream: &mut TcpStream) -> Result<()> {
     let _span = tracing::info_span!("connect").entered();
+    let mut conn = Connection::new(stream);
 
     // IN: `Set Chunk Size`
     {
-        let chunk = Chunk::read_from(stream)?;
-        let raw_value: [u8; 4] = chunk.payload.as_ref().try_into()?;
+        let msg = conn.recv()?;
+        let raw_value: [u8; 4] = msg.payload.as_ref().try_into()?;
         let value = u32::from_be_bytes(raw_value);
 
         info!("The client set a chunk size limit: {value} Bytes");
@@ -80,8 +81,10 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
 
     // IN: `Command Message (connect)`
     {
-        let chunk = Chunk::read_from(stream)?;
-        let mut iter = chunk.payload.iter().copied();
+        let msg = conn.recv()?;
+        debug!(?msg.header);
+
+        let mut iter = msg.payload.iter().copied();
 
         let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
         ensure!(command == "connect", "Unexpected command");
@@ -104,7 +107,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             0x00, 0x00, 0x00, 0x00, // Stream ID
             0x00, 0x00, 0x01, 0x00, // Payload
         ];
-        stream.write_all(&window_acknowledgement_size)?;
+        conn.send_raw(&window_acknowledgement_size)?;
     }
 
     // OUT: `Set Peer Bandwidth`
@@ -118,7 +121,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             0x00, 0x00, 0x00, 0x00, // Stream ID
             0x00, 0x00, 0x01, 0x00, 0x00, // Payload
         ];
-        stream.write_all(&set_peer_bandwidth)?;
+        conn.send_raw(&set_peer_bandwidth)?;
     }
 
     // IN: `Window Acknowledgement Size`
@@ -139,7 +142,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             0x00, 0x00, // Event (= `StreamBegin`)
             0x00, 0x00, 0x11, 0x11, // Event data
         ];
-        stream.write_all(&user_control_message)?;
+        conn.send_raw(&user_control_message)?;
     }
 
     // OUT: `Command Message(_result - connect response)`
@@ -166,14 +169,14 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             MessageType::Command as u8, // Type
             0x00, 0x00, 0x00, 0x00, // Stream ID
         ];
-        stream.write_all(&user_control_message_header)?;
-        stream.write_all(&payload)?;
+        conn.send_raw(&user_control_message_header)?;
+        conn.send_raw(&payload)?;
     }
 
     // Listen for any messages
     loop {
-        let chunk = Chunk::read_from(stream)?;
-        debug!(?chunk);
+        let msg = conn.recv()?;
+        debug!(?msg);
     }
 
     // Ok(())
@@ -194,6 +197,7 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter("debug")
         .with_target(false)
+        .pretty()
         .init();
 
     let listener = TcpListener::bind("0.0.0.0:1935")?;
