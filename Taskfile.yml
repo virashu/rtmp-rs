@@ -11,5 +11,15 @@ tasks:
       RUST_BACKTRACE: 1
       RUST_LIB_BACKTRACE: 1
 
-  ffmpeg: ffmpeg -re -stream_loop -1 -i {{ .TEST_FILE }} -c copy -f flv rtmp://{{ .RTMP_ADDR }}
+  ffmpeg:
+    cmd: |
+      ffmpeg \
+        -loglevel debug \
+        -stream_loop -1 \
+        -i {{ .TEST_FILE }} \
+        -c copy -f flv \
+        -chunk_size 4096 \
+        rtmp://{{ .RTMP_ADDR }}
+
   # -c:v libx264 -c:a aac
+  # -c copy

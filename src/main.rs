@@ -76,6 +76,8 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
     let _span = tracing::info_span!("connect").entered();
     let mut conn = Connection::new(stream);
 
+    conn.config.max_chunk_payload_size = 128;
+
     // loop {
     //     let msg = conn.recv()?;
     //     debug!(?msg);
@@ -87,7 +89,19 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
     //     let raw_value: [u8; 4] = msg.payload.as_ref().try_into()?;
     //     let value = u32::from_be_bytes(raw_value);
 
+    //     conn.config.max_chunk_payload_size = value;
+
     //     info!("The client set a chunk size limit: {value} Bytes");
+    // }
+
+    // {
+    //     let msg = Message::new(
+    //         MessageType::SetChunkSize,
+    //         0, // Ignored
+    //         CONTROL_MESSAGE_STREAM_ID,
+    //         &[0x00, 0x00, 0x00, 0x80],
+    //     )?;
+    //     conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
     // }
 
     // IN: `Command Message (connect)`

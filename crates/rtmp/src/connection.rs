@@ -11,11 +11,17 @@ use crate::{
         ChunkStreamManager,
         header::{ChunkBasicHeader, ChunkHeader, ChunkHeaderType, ChunkMessageHeader},
     },
-    constants::MAX_CHUNK_PAYLOAD_SIZE,
+    constants::DEFAULT_MAX_CHUNK_PAYLOAD_SIZE,
     message::{Message, MessageHeader},
 };
 
+pub struct ConnectionConfig {
+    pub max_chunk_payload_size: u32,
+}
+
 pub struct Connection<'s> {
+    pub config: ConnectionConfig,
+
     stream: &'s mut TcpStream,
     chunking_state: ChunkStreamManager,
 }
@@ -23,6 +29,9 @@ pub struct Connection<'s> {
 impl<'s> Connection<'s> {
     pub fn new(stream: &'s mut TcpStream) -> Self {
         Self {
+            config: ConnectionConfig {
+                max_chunk_payload_size: DEFAULT_MAX_CHUNK_PAYLOAD_SIZE,
+            },
             stream,
             chunking_state: ChunkStreamManager::new(),
         }
@@ -70,13 +79,14 @@ impl<'s> Connection<'s> {
             .context("No message stream ID")?;
 
         let read_len = ((message_payload_length as usize) - chunk_metadata.buffer.len())
-            .min(MAX_CHUNK_PAYLOAD_SIZE as usize);
+            .min(self.config.max_chunk_payload_size as usize);
 
         let mut payload_fragment = vec![0; read_len];
         self.stream.read_exact(&mut payload_fragment)?;
 
         chunk_metadata.buffer.extend(payload_fragment);
 
+        trace!("Read {read_len} bytes");
         trace!(?chunk_metadata);
 
         if chunk_metadata.buffer.len() < message_payload_length as usize {
