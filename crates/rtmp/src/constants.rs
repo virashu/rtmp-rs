@@ -1,2 +1,4 @@
 pub const CONTROL_CHUNK_STREAM_ID: u32 = 2;
 pub const CONTROL_MESSAGE_STREAM_ID: u32 = 0;
+
+pub const MAX_CHUNK_PAYLOAD_SIZE: u32 = 128;

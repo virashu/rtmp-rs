@@ -1,49 +1,113 @@
 use std::{
-    collections::BTreeMap,
     io::{Read, Write},
     net::TcpStream,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
+use tracing::trace;
 
 use crate::{
     chunk::{
-        ChunkingState,
+        ChunkStreamManager,
         header::{ChunkBasicHeader, ChunkHeader, ChunkHeaderType, ChunkMessageHeader},
-        make_message_header,
     },
-    message::Message,
+    constants::MAX_CHUNK_PAYLOAD_SIZE,
+    message::{Message, MessageHeader},
 };
 
 pub struct Connection<'s> {
     stream: &'s mut TcpStream,
-    chunking_state: ChunkingState,
+    chunking_state: ChunkStreamManager,
 }
 
 impl<'s> Connection<'s> {
     pub fn new(stream: &'s mut TcpStream) -> Self {
         Self {
             stream,
-            chunking_state: ChunkingState {
-                message_types: BTreeMap::new(),
-                payload_lengths: BTreeMap::new(),
-                timestamps: BTreeMap::new(),
-                stream_ids: BTreeMap::new(),
-            },
+            chunking_state: ChunkStreamManager::new(),
         }
     }
 
-    pub fn recv(&mut self) -> Result<Message> {
+    fn receive_one_chunk(&mut self) -> Result<Option<Message>> {
         let chunk_header = ChunkHeader::read_from(self.stream)?;
-        let message_header = make_message_header(&mut self.chunking_state, chunk_header)?;
+        let chunk_stream_id = chunk_header.basic_header.chunk_stream_id;
 
-        let mut payload = vec![0; message_header.payload_length as usize];
-        self.stream.read_exact(&mut payload)?;
+        let chunk_metadata = self.chunking_state.get_mut(chunk_stream_id);
 
-        Ok(Message {
+        let chunk_message_header = chunk_header.message_header;
+
+        let message_type = chunk_message_header
+            .message_type
+            .inspect(|value| {
+                chunk_metadata.message_type = Some(*value);
+            })
+            .or(chunk_metadata.message_type)
+            .context("No message type ID")?;
+
+        let message_payload_length = chunk_message_header
+            .message_length
+            .inspect(|value| {
+                chunk_metadata.message_payload_length = Some(*value);
+            })
+            .or(chunk_metadata.message_payload_length)
+            .context("No payload length")?;
+
+        let message_timestamp = chunk_message_header
+            .timestamp
+            .inspect(|value| {
+                chunk_metadata.message_timestamp =
+                    Some(*value + chunk_metadata.message_timestamp.unwrap_or(0));
+            })
+            .or(chunk_metadata.message_timestamp)
+            .context("No timestamp")?;
+
+        let message_stream_id = chunk_message_header
+            .message_stream_id
+            .inspect(|value| {
+                chunk_metadata.message_stream_id = Some(*value);
+            })
+            .or(chunk_metadata.message_stream_id)
+            .context("No message stream ID")?;
+
+        let read_len = ((message_payload_length as usize) - chunk_metadata.buffer.len())
+            .min(MAX_CHUNK_PAYLOAD_SIZE as usize);
+
+        let mut payload_fragment = vec![0; read_len];
+        self.stream.read_exact(&mut payload_fragment)?;
+
+        chunk_metadata.buffer.extend(payload_fragment);
+
+        trace!(?chunk_metadata);
+
+        if chunk_metadata.buffer.len() < message_payload_length as usize {
+            return Ok(None);
+        }
+
+        if chunk_metadata.buffer.len() > message_payload_length as usize {
+            bail!("Read too much!");
+        }
+
+        let message_header = MessageHeader {
+            message_type,
+            payload_length: message_payload_length,
+            timestamp: message_timestamp,
+            stream_id: message_stream_id,
+        };
+
+        let payload = chunk_metadata.buffer.split_off(0).into_boxed_slice();
+
+        Ok(Some(Message {
             header: message_header,
-            payload: payload.into_boxed_slice(),
-        })
+            payload,
+        }))
+    }
+
+    pub fn recv(&mut self) -> Result<Message> {
+        loop {
+            if let Some(message) = self.receive_one_chunk()? {
+                return Ok(message);
+            }
+        }
     }
 
     pub fn send_raw(&mut self, buf: &[u8]) -> Result<()> {

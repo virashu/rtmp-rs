@@ -76,6 +76,11 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
     let _span = tracing::info_span!("connect").entered();
     let mut conn = Connection::new(stream);
 
+    // loop {
+    //     let msg = conn.recv()?;
+    //     debug!(?msg);
+    // }
+
     // IN: `Set Chunk Size`
     // {
     //     let msg = conn.recv()?;
@@ -194,7 +199,7 @@ fn handle(mut stream: TcpStream) -> Result<()> {
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter("debug")
+        .with_env_filter("trace")
         .with_target(false)
         .pretty()
         .init();
