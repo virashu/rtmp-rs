@@ -72,16 +72,120 @@ fn handshake(stream: &mut TcpStream) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+enum State {
+    PreConnect,
+    PostConnect,
+}
+
 fn connect(stream: &mut TcpStream) -> Result<()> {
     let _span = tracing::info_span!("connect").entered();
     let mut conn = Connection::new(stream);
 
+    let mut state = State::PreConnect;
+
     conn.config.max_chunk_payload_size = 128;
 
-    // loop {
-    //     let msg = conn.recv()?;
-    //     debug!(?msg);
-    // }
+    loop {
+        let msg = conn.recv()?;
+
+        match (state, msg.header.message_type) {
+            (State::PreConnect, MessageType::SetChunkSize) => {
+                let raw_value: [u8; 4] = msg.payload.as_ref().try_into()?;
+                let value = u32::from_be_bytes(raw_value);
+                conn.config.max_chunk_payload_size = value;
+                info!("The client set a chunk size limit: {value} Bytes");
+            }
+
+            (State::PreConnect, MessageType::Command) => {
+                // IN: `Command Message (connect)`
+                {
+                    let mut iter = msg.payload.iter().copied();
+
+                    let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
+                    ensure!(command == "connect", "Unexpected command");
+
+                    let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
+                    ensure!(transmission_id == 1.0, "Unexpected transmission ID");
+
+                    let args = Value::deserialize(&mut iter)?.as_object()?.to_hashmap();
+                    debug!(?args);
+                }
+
+                // OUT: `Window Acknowledgement Size`
+                {
+                    let msg = control_message::window_acknowledgement_size(0x10000);
+                    conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
+                }
+
+                // OUT: `Set Peer Bandwidth`
+                {
+                    let msg = control_message::set_peer_bandwidth(0x10000, 0);
+                    conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
+                }
+
+                // OUT: `User Control Message (StreamBegin)`
+                {
+                    let msg = control_message::user_control_message(
+                        UserControlMessageEvent::StreamBegin,
+                        &[0x00, 0x00, 0x11, 0x11],
+                    )?;
+                    conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
+                }
+
+                // OUT: `Command Message(_result - connect response)`
+                {
+                    let mut payload = Vec::<u8>::new();
+
+                    payload.extend(&Value::String(AmfString::new("_result")?).serialize());
+                    payload.extend(&Value::Number(AmfNumber::new(1.0)).serialize());
+                    payload.extend(
+                        &Value::Object(AmfObject::new([(
+                            String::from("flashVer"),
+                            Value::try_from("FMLE/3.0 (compatible; FMSc/1.0)")?,
+                        )])?)
+                        .serialize(),
+                    );
+                    payload.extend(
+                        &Value::Object(AmfObject::new([
+                            (String::from("level"), Value::try_from("status")?),
+                            (
+                                String::from("code"),
+                                Value::try_from("NetConnection.Connect.Success")?,
+                            ),
+                            (
+                                String::from("description"),
+                                Value::try_from("Connection succeeded")?,
+                            ),
+                            (
+                                String::from("clientId"),
+                                Value::Number(AmfNumber::new(1337.0)),
+                            ),
+                            (
+                                String::from("objectEncoding"),
+                                Value::Number(AmfNumber::new(0.0)),
+                            ),
+                        ])?)
+                        .serialize(),
+                    );
+
+                    let msg = Message::new(
+                        MessageType::Command,
+                        0, // Ignored
+                        CONTROL_MESSAGE_STREAM_ID,
+                        &payload,
+                    )?;
+                    conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
+                }
+
+                state = State::PostConnect;
+            }
+
+            _ => {
+                debug!(?msg);
+            }
+        }
+    }
 
     // IN: `Set Chunk Size`
     // {
@@ -94,108 +198,11 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
     //     info!("The client set a chunk size limit: {value} Bytes");
     // }
 
-    // {
-    //     let msg = Message::new(
-    //         MessageType::SetChunkSize,
-    //         0, // Ignored
-    //         CONTROL_MESSAGE_STREAM_ID,
-    //         &[0x00, 0x00, 0x00, 0x80],
-    //     )?;
-    //     conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
-    // }
-
-    // IN: `Command Message (connect)`
-    {
-        let msg = conn.recv()?;
-        let mut iter = msg.payload.iter().copied();
-
-        let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
-        ensure!(command == "connect", "Unexpected command");
-
-        let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
-        ensure!(transmission_id == 1.0, "Unexpected transmission ID");
-
-        let args = Value::deserialize(&mut iter)?.as_object()?.to_hashmap();
-        debug!(?args);
-    }
-
-    // OUT: `Window Acknowledgement Size`
-    {
-        let msg = control_message::window_acknowledgement_size(0x10000);
-        conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
-    }
-
-    // OUT: `Set Peer Bandwidth`
-    {
-        let msg = control_message::set_peer_bandwidth(0x10000, 0);
-        conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
-    }
-
     // IN: `Window Acknowledgement Size`
     // {
     //     let chunk = Chunk::read_from(stream)?;
     //     let mut iter = chunk.content.iter().copied();
     // }
-
-    // OUT: `User Control Message (StreamBegin)`
-    {
-        let msg = control_message::user_control_message(
-            UserControlMessageEvent::StreamBegin,
-            &[0x00, 0x00, 0x11, 0x11],
-        )?;
-        conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
-    }
-
-    // OUT: `Command Message(_result - connect response)`
-    {
-        let mut payload = Vec::<u8>::new();
-
-        payload.extend(&Value::String(AmfString::new("_result")?).serialize());
-        payload.extend(&Value::Number(AmfNumber::new(1.0)).serialize());
-        payload.extend(
-            &Value::Object(AmfObject::new([(
-                String::from("flashVer"),
-                Value::try_from("FMLE/3.0 (compatible; FMSc/1.0)")?,
-            )])?)
-            .serialize(),
-        );
-        payload.extend(
-            &Value::Object(AmfObject::new([
-                (String::from("level"), Value::try_from("status")?),
-                (
-                    String::from("code"),
-                    Value::try_from("NetConnection.Connect.Success")?,
-                ),
-                (
-                    String::from("description"),
-                    Value::try_from("Connection succeeded")?,
-                ),
-                (
-                    String::from("clientId"),
-                    Value::Number(AmfNumber::new(1337.0)),
-                ),
-                (
-                    String::from("objectEncoding"),
-                    Value::Number(AmfNumber::new(0.0)),
-                ),
-            ])?)
-            .serialize(),
-        );
-
-        let msg = Message::new(
-            MessageType::Command,
-            0, // Ignored
-            CONTROL_MESSAGE_STREAM_ID,
-            &payload,
-        )?;
-        conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
-    }
-
-    // Listen for any messages
-    loop {
-        let msg = conn.recv()?;
-        debug!(?msg);
-    }
 
     // Ok(())
 }

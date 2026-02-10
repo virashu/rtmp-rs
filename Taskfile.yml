@@ -17,9 +17,9 @@ tasks:
         -loglevel debug \
         -stream_loop -1 \
         -i {{ .TEST_FILE }} \
-        -c copy -f flv \
-        -chunk_size 4096 \
-        rtmp://{{ .RTMP_ADDR }}
+        -c copy \
+        -f flv \
+        "rtmp://{{ .RTMP_ADDR }} chunk_size=4096"
 
   # -c:v libx264 -c:a aac
   # -c copy
