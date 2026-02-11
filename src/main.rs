@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Result, bail, ensure};
 use tracing::{debug, info};
 
-use amf::amf0::{AmfNumber, AmfObject, AmfString, Value};
+use amf::amf0::{AmfObject, Sequence, Value};
 use rtmp::{
     connection::Connection,
     constants::{CONTROL_CHUNK_STREAM_ID, CONTROL_MESSAGE_STREAM_ID},
@@ -23,7 +23,6 @@ fn get_timestamp_u32() -> u32 {
         .as_secs() as u32
 }
 
-/// <https://en.wikipedia.org/wiki/Real-Time_Messaging_Protocol#Handshake>
 #[allow(clippy::cast_possible_truncation)]
 fn handshake(stream: &mut TcpStream) -> Result<()> {
     let _span = tracing::info_span!("handshake").entered();
@@ -74,30 +73,45 @@ fn handshake(stream: &mut TcpStream) -> Result<()> {
 
 #[derive(Clone, Copy, Debug)]
 enum State {
-    PreConnect,
-    PostConnect,
+    BeforeConnect,
+    BeforePlay,
 }
 
 fn connect(stream: &mut TcpStream) -> Result<()> {
     let _span = tracing::info_span!("connect").entered();
     let mut conn = Connection::new(stream);
 
-    let mut state = State::PreConnect;
+    let mut state = State::BeforeConnect;
 
-    conn.config.max_chunk_payload_size = 128;
+    // conn.config.max_chunk_payload_size = 128;
 
     loop {
         let msg = conn.recv()?;
 
         match (state, msg.header.message_type) {
-            (State::PreConnect, MessageType::SetChunkSize) => {
-                let raw_value: [u8; 4] = msg.payload.as_ref().try_into()?;
-                let value = u32::from_be_bytes(raw_value);
-                conn.config.max_chunk_payload_size = value;
-                info!("The client set a chunk size limit: {value} Bytes");
+            (State::BeforeConnect, MessageType::SetChunkSize) => {
+                // IN
+                {
+                    let raw_value: [u8; 4] = msg.payload.as_ref().try_into()?;
+                    let value = u32::from_be_bytes(raw_value);
+                    conn.config.max_chunk_payload_size = value;
+                    info!("The client set a chunk size limit: {value} Bytes");
+                }
+
+                // OUT
+                {
+                    // Set the same for the output
+                    let msg = Message::new(
+                        MessageType::SetChunkSize,
+                        0, // Ignored
+                        CONTROL_MESSAGE_STREAM_ID,
+                        &conn.config.max_chunk_payload_size.to_be_bytes(),
+                    )?;
+                    conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
+                }
             }
 
-            (State::PreConnect, MessageType::Command) => {
+            (State::BeforeConnect, MessageType::Command) => {
                 // IN: `Command Message (connect)`
                 {
                     let mut iter = msg.payload.iter().copied();
@@ -108,8 +122,8 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                     let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
                     ensure!(transmission_id == 1.0, "Unexpected transmission ID");
 
-                    let args = Value::deserialize(&mut iter)?.as_object()?.to_hashmap();
-                    debug!(?args);
+                    // let args = Value::deserialize(&mut iter)?.as_object()?.to_hashmap();
+                    // debug!(?args);
                 }
 
                 // OUT: `Window Acknowledgement Size`
@@ -128,7 +142,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                 {
                     let msg = control_message::user_control_message(
                         UserControlMessageEvent::StreamBegin,
-                        &[0x00, 0x00, 0x11, 0x11],
+                        &[0x00, 0x00, 0x00, 0x00],
                     )?;
                     conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
                 }
@@ -137,8 +151,8 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                 {
                     let mut payload = Vec::<u8>::new();
 
-                    payload.extend(&Value::String(AmfString::new("_result")?).serialize());
-                    payload.extend(&Value::Number(AmfNumber::new(1.0)).serialize());
+                    payload.extend(&Value::try_from("_result")?.serialize());
+                    payload.extend(&Value::from(1.0).serialize());
                     payload.extend(
                         &Value::Object(AmfObject::new([(
                             String::from("flashVer"),
@@ -157,14 +171,8 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                                 String::from("description"),
                                 Value::try_from("Connection succeeded")?,
                             ),
-                            (
-                                String::from("clientId"),
-                                Value::Number(AmfNumber::new(1337.0)),
-                            ),
-                            (
-                                String::from("objectEncoding"),
-                                Value::Number(AmfNumber::new(0.0)),
-                            ),
+                            (String::from("clientId"), Value::from(1337.0)),
+                            (String::from("objectEncoding"), Value::from(0.0)),
                         ])?)
                         .serialize(),
                     );
@@ -178,25 +186,104 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                     conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
                 }
 
-                state = State::PostConnect;
+                state = State::BeforePlay;
             }
 
+            (State::BeforePlay, MessageType::Command) => {
+                let mut iter = msg.payload.iter().copied();
+
+                let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
+                let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
+
+                match command.as_ref() {
+                    "createStream" => {
+                        let args = Value::deserialize(&mut iter)?;
+                        debug!(?args, "createStream");
+
+                        // OUT: _result
+                        {
+                            let payload = Sequence::from(&[
+                                Value::try_from("_result")?,
+                                Value::from(transmission_id),
+                                Value::Null,
+                                Value::from(100.0),
+                            ])
+                            .serialize();
+
+                            let msg = Message::new(
+                                MessageType::Command,
+                                0, // Ignored
+                                CONTROL_MESSAGE_STREAM_ID,
+                                &payload,
+                            )?;
+                            conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
+                        }
+                    }
+
+                    "publish" => {
+                        _ = Value::deserialize(&mut iter)?; // Null
+
+                        let publishing_name =
+                            Value::deserialize(&mut iter)?.as_string()?.to_string();
+                        let publishing_type =
+                            Value::deserialize(&mut iter)?.as_string()?.to_string();
+
+                        debug!(?publishing_name, ?publishing_type, "publish");
+
+                        // OUT: onStatus
+                        {
+                            let payload = Sequence::from(&[
+                                Value::try_from("onStatus")?,
+                                Value::from(0.0),
+                                Value::Null,
+                                Value::Object(AmfObject::new([
+                                    (String::from("level"), Value::try_from("status")?),
+                                    (
+                                        String::from("code"),
+                                        Value::try_from("NetStream.Publish.Start")?,
+                                    ),
+                                    (
+                                        String::from("description"),
+                                        Value::try_from("Connection succeeded")?,
+                                    ),
+                                ])?),
+                            ])
+                            .serialize();
+
+                            let msg = Message::new(
+                                MessageType::Command,
+                                0, // Ignored
+                                CONTROL_MESSAGE_STREAM_ID,
+                                &payload,
+                            )?;
+                            conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
+                        }
+                    }
+
+                    _ => {
+                        debug!(?command, ?transmission_id, "Unhandled command");
+                    }
+                }
+            }
+
+            // (_, MessageType::Command) => {
+            //     let mut iter = msg.payload.iter().copied();
+
+            //     let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
+            //     let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
+            //     let args = Value::deserialize(&mut iter)?;
+
+            //     debug!(?command, ?transmission_id, ?args);
+            // }
             _ => {
-                debug!(?msg);
+                debug!(
+                    stream = msg.header.stream_id,
+                    type = ?msg.header.message_type,
+                    size = msg.header.payload_length,
+                );
             }
         }
     }
-
-    // IN: `Set Chunk Size`
-    // {
-    //     let msg = conn.recv()?;
-    //     let raw_value: [u8; 4] = msg.payload.as_ref().try_into()?;
-    //     let value = u32::from_be_bytes(raw_value);
-
-    //     conn.config.max_chunk_payload_size = value;
-
-    //     info!("The client set a chunk size limit: {value} Bytes");
-    // }
 
     // IN: `Window Acknowledgement Size`
     // {
@@ -220,9 +307,9 @@ fn handle(mut stream: TcpStream) -> Result<()> {
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter("trace")
+        .with_env_filter("debug")
         .with_target(false)
-        .pretty()
+        // .pretty()
         .init();
 
     let listener = TcpListener::bind("0.0.0.0:1935")?;

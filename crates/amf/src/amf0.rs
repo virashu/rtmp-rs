@@ -2,11 +2,13 @@ pub mod constants;
 
 mod number;
 mod object;
+mod sequence;
 mod string;
 mod value;
 
 pub use number::AmfNumber;
 pub use object::AmfObject;
+pub use sequence::Sequence;
 pub use string::AmfString;
 pub use value::Value;
 

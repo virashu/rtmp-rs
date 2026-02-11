@@ -110,3 +110,15 @@ impl From<AmfString> for Value {
         Self::String(value)
     }
 }
+
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        Self::Number(AmfNumber::new(value))
+    }
+}
+
+impl From<AmfNumber> for Value {
+    fn from(value: AmfNumber) -> Self {
+        Self::Number(value)
+    }
+}

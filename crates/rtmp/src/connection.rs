@@ -38,6 +38,8 @@ impl<'s> Connection<'s> {
     }
 
     fn receive_one_chunk(&mut self) -> Result<Option<Message>> {
+        let _span = tracing::info_span!("inbound::chunk").entered();
+
         let chunk_header = ChunkHeader::read_from(self.stream)?;
         let chunk_stream_id = chunk_header.basic_header.chunk_stream_id;
 
@@ -86,8 +88,7 @@ impl<'s> Connection<'s> {
 
         chunk_metadata.buffer.extend(payload_fragment);
 
-        trace!("Read {read_len} bytes");
-        trace!(?chunk_metadata);
+        trace!("Read {read_len} bytes. Metadata: {:?}", chunk_metadata);
 
         if chunk_metadata.buffer.len() < message_payload_length as usize {
             return Ok(None);
@@ -125,6 +126,8 @@ impl<'s> Connection<'s> {
     }
 
     pub fn send(&mut self, chunk_stream_id: u32, message: Message) -> Result<()> {
+        let _span = tracing::info_span!("outbound").entered();
+
         // TODO: Optimize
         // Sending full header for now
         let chunk_header = ChunkHeader {
@@ -140,8 +143,14 @@ impl<'s> Connection<'s> {
             },
         };
 
-        self.send_raw(&chunk_header.serialize())?;
+        // TODO: Split packet if (len > max_chunk_len)
+
+        let header_raw = chunk_header.serialize();
+
+        self.send_raw(&header_raw)?;
         self.send_raw(&message.payload)?;
+
+        trace!(header = header_raw, payload = message.payload);
 
         Ok(())
     }
