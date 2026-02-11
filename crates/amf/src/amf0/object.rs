@@ -43,6 +43,7 @@ impl AmfObject {
             buf.extend(v.serialize());
         }
 
+        buf.extend(&[0x00, 0x00]); // Empty key
         buf.push(types::OBJECT_END);
 
         buf.into_boxed_slice()
