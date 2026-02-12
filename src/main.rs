@@ -101,67 +101,62 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                 // OUT
                 {
                     // Set the same for the output
-                    let msg = Message::new(
-                        MessageType::SetChunkSize,
-                        0, // Ignored
-                        CONTROL_MESSAGE_STREAM_ID,
-                        &conn.config.max_chunk_payload_size.to_be_bytes(),
+                    conn.send(
+                        CONTROL_CHUNK_STREAM_ID,
+                        Message::new(
+                            MessageType::SetChunkSize,
+                            0, // Ignored
+                            CONTROL_MESSAGE_STREAM_ID,
+                            &conn.config.max_chunk_payload_size.to_be_bytes(),
+                        )?,
                     )?;
-                    conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
                 }
             }
 
             (State::BeforeConnect, MessageType::Command) => {
                 // IN: `Command Message (connect)`
-                {
-                    let mut iter = msg.payload.iter().copied();
 
-                    let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
-                    ensure!(command == "connect", "Unexpected command");
+                let mut iter = msg.payload.iter().copied();
 
-                    let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
-                    ensure!(transmission_id == 1.0, "Unexpected transmission ID");
+                let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
+                ensure!(command == "connect", "Unexpected command");
 
-                    // let args = Value::deserialize(&mut iter)?.as_object()?.to_hashmap();
-                    // debug!(?args);
-                }
+                let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
+
+                // let args = Value::deserialize(&mut iter)?.as_object()?.to_hashmap();
+                // debug!(?args);
 
                 // OUT: `Window Acknowledgement Size`
-                {
-                    let msg = control_message::window_acknowledgement_size(0x10000);
-                    conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
-                }
+                conn.send(
+                    CONTROL_CHUNK_STREAM_ID,
+                    control_message::window_acknowledgement_size(0x10000),
+                )?;
 
                 // OUT: `Set Peer Bandwidth`
-                {
-                    let msg = control_message::set_peer_bandwidth(0x10000, 0);
-                    conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
-                }
+                conn.send(
+                    CONTROL_CHUNK_STREAM_ID,
+                    control_message::set_peer_bandwidth(0x10000, 0),
+                )?;
 
                 // OUT: `User Control Message (StreamBegin)`
-                {
-                    let msg = control_message::user_control_message(
+                conn.send(
+                    CONTROL_CHUNK_STREAM_ID,
+                    control_message::user_control_message(
                         UserControlMessageEvent::StreamBegin,
                         &[0x00, 0x00, 0x00, 0x00],
-                    )?;
-                    conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
-                }
+                    )?,
+                )?;
 
                 // OUT: `Command Message(_result - connect response)`
                 {
-                    let mut payload = Vec::<u8>::new();
-
-                    payload.extend(&Value::try_from("_result")?.serialize());
-                    payload.extend(&Value::from(1.0).serialize());
-                    payload.extend(
-                        &Value::Object(AmfObject::new([(
+                    let payload = Sequence::from(&[
+                        Value::try_from("_result")?,
+                        Value::from(transmission_id),
+                        Value::Object(AmfObject::new([(
                             String::from("flashVer"),
                             Value::try_from("FMLE/3.0 (compatible; FMSc/1.0)")?,
-                        )])?)
-                        .serialize(),
-                    );
-                    payload.extend(
-                        &Value::Object(AmfObject::new([
+                        )])?),
+                        Value::Object(AmfObject::new([
                             (String::from("level"), Value::try_from("status")?),
                             (
                                 String::from("code"),
@@ -173,17 +168,19 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                             ),
                             (String::from("clientId"), Value::from(1337.0)),
                             (String::from("objectEncoding"), Value::from(0.0)),
-                        ])?)
-                        .serialize(),
-                    );
+                        ])?),
+                    ])
+                    .serialize();
 
-                    let msg = Message::new(
-                        MessageType::Command,
-                        0, // Ignored
-                        CONTROL_MESSAGE_STREAM_ID,
-                        &payload,
+                    conn.send(
+                        CONTROL_CHUNK_STREAM_ID,
+                        Message::new(
+                            MessageType::Command,
+                            0, // Ignored
+                            CONTROL_MESSAGE_STREAM_ID,
+                            &payload,
+                        )?,
                     )?;
-                    conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
                 }
 
                 state = State::BeforePlay;
@@ -210,13 +207,15 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                             ])
                             .serialize();
 
-                            let msg = Message::new(
-                                MessageType::Command,
-                                0, // Ignored
-                                CONTROL_MESSAGE_STREAM_ID,
-                                &payload,
+                            conn.send(
+                                CONTROL_CHUNK_STREAM_ID,
+                                Message::new(
+                                    MessageType::Command,
+                                    0, // Ignored
+                                    CONTROL_MESSAGE_STREAM_ID,
+                                    &payload,
+                                )?,
                             )?;
-                            conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
                         }
                     }
 
@@ -250,13 +249,15 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                             ])
                             .serialize();
 
-                            let msg = Message::new(
-                                MessageType::Command,
-                                0, // Ignored
-                                CONTROL_MESSAGE_STREAM_ID,
-                                &payload,
+                            conn.send(
+                                CONTROL_CHUNK_STREAM_ID,
+                                Message::new(
+                                    MessageType::Command,
+                                    0, // Ignored
+                                    CONTROL_MESSAGE_STREAM_ID,
+                                    &payload,
+                                )?,
                             )?;
-                            conn.send(CONTROL_CHUNK_STREAM_ID, msg)?;
                         }
                     }
 

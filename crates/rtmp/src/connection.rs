@@ -125,32 +125,73 @@ impl<'s> Connection<'s> {
         Ok(self.stream.write_all(buf)?)
     }
 
+    pub fn send_one_chunk(&mut self) -> Result<()> {
+        todo!()
+    }
+
     pub fn send(&mut self, chunk_stream_id: u32, message: Message) -> Result<()> {
         let _span = tracing::info_span!("outbound").entered();
 
-        // TODO: Optimize
-        // Sending full header for now
-        let chunk_header = ChunkHeader {
-            basic_header: ChunkBasicHeader {
-                chunk_header_type: ChunkHeaderType::Type0,
-                chunk_stream_id,
-            },
-            message_header: ChunkMessageHeader {
-                timestamp: Some(message.header.timestamp),
-                message_length: Some(message.header.payload_length),
-                message_type: Some(message.header.message_type),
-                message_stream_id: Some(message.header.stream_id),
-            },
-        };
+        if message.header.payload_length <= self.config.max_chunk_payload_size {
+            let chunk_header = ChunkHeader {
+                basic_header: ChunkBasicHeader {
+                    chunk_header_type: ChunkHeaderType::Type0,
+                    chunk_stream_id,
+                },
+                message_header: ChunkMessageHeader {
+                    timestamp: Some(message.header.timestamp),
+                    message_length: Some(message.header.payload_length),
+                    message_type: Some(message.header.message_type),
+                    message_stream_id: Some(message.header.stream_id),
+                },
+            };
+            let header_raw = chunk_header.serialize();
 
-        // TODO: Split packet if (len > max_chunk_len)
+            self.send_raw(&header_raw)?;
+            self.send_raw(&message.payload)?;
 
-        let header_raw = chunk_header.serialize();
+            trace!(header = header_raw, payload = message.payload);
+        } else {
+            let mut split = message
+                .payload
+                .chunks(self.config.max_chunk_payload_size as usize);
 
-        self.send_raw(&header_raw)?;
-        self.send_raw(&message.payload)?;
+            let chunk_header = ChunkHeader {
+                basic_header: ChunkBasicHeader {
+                    chunk_header_type: ChunkHeaderType::Type0,
+                    chunk_stream_id,
+                },
+                message_header: ChunkMessageHeader {
+                    timestamp: Some(message.header.timestamp),
+                    message_length: Some(message.header.payload_length),
+                    message_type: Some(message.header.message_type),
+                    message_stream_id: Some(message.header.stream_id),
+                },
+            };
+            let header_raw = chunk_header.serialize();
 
-        trace!(header = header_raw, payload = message.payload);
+            self.send_raw(&header_raw)?;
+            self.send_raw(split.next().unwrap())?;
+
+            for part in split {
+                let chunk_header = ChunkHeader {
+                    basic_header: ChunkBasicHeader {
+                        chunk_header_type: ChunkHeaderType::Type3,
+                        chunk_stream_id,
+                    },
+                    message_header: ChunkMessageHeader {
+                        timestamp: None,
+                        message_length: None,
+                        message_type: None,
+                        message_stream_id: None,
+                    },
+                };
+                let header_raw = chunk_header.serialize();
+
+                self.send_raw(&header_raw)?;
+                self.send_raw(part)?;
+            }
+        }
 
         Ok(())
     }
