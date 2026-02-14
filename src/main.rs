@@ -1,4 +1,5 @@
 use std::{
+    fs::OpenOptions,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     time::SystemTime,
@@ -21,6 +22,17 @@ fn get_timestamp_u32() -> u32 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("Invalid system time")
         .as_secs() as u32
+}
+
+fn write_header(buf: &mut impl Write) -> Result<()> {
+    buf.write_all(b"FLV")?;
+    buf.write_all(&[0x01])?; // Version
+    buf.write_all(&[0x01 | 0x04])?; // Data mask
+    buf.write_all(&[0x00, 0x00, 0x00, 0x09])?; // Header size
+
+    buf.write_all(&[0x00, 0x00, 0x00, 0x00])?; // Zero-th tag size (0)
+
+    Ok(())
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -74,7 +86,9 @@ fn handshake(stream: &mut TcpStream) -> Result<()> {
 #[derive(Clone, Copy, Debug)]
 enum State {
     BeforeConnect,
-    BeforePlay,
+    BeforePublish,
+    BeforeMetadata,
+    Running,
 }
 
 fn connect(stream: &mut TcpStream) -> Result<()> {
@@ -82,6 +96,15 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
     let mut conn = Connection::new(stream);
 
     let mut state = State::BeforeConnect;
+    let mut last_video_timestamp = 0;
+    let mut last_audio_timestamp = 0;
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open("video.flv")?;
+    write_header(&mut file)?;
 
     // conn.config.max_chunk_payload_size = 128;
 
@@ -184,10 +207,10 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                     )?;
                 }
 
-                state = State::BeforePlay;
+                state = State::BeforePublish;
             }
 
-            (State::BeforePlay, MessageType::Command) => {
+            (State::BeforePublish, MessageType::Command) => {
                 let mut iter = msg.payload.iter().copied();
 
                 let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
@@ -260,6 +283,8 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                                 )?,
                             )?;
                         }
+
+                        state = State::BeforeMetadata;
                     }
 
                     _ => {
@@ -268,29 +293,96 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                 }
             }
 
-            // (_, MessageType::Command) => {
-            //     let mut iter = msg.payload.iter().copied();
+            (State::BeforeMetadata, MessageType::Data) => {
+                let mut iter = msg.payload.iter().copied();
 
-            //     let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
-            //     let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
-            //     let args = Value::deserialize(&mut iter)?;
+                let data = Sequence::deserialize(&mut iter)?;
+                debug!("{data:#?}");
 
-            //     debug!(?command, ?transmission_id, ?args);
-            // }
+                state = State::Running;
+            }
+
+            (State::Running, MessageType::Command) => {
+                let mut iter = msg.payload.iter().copied();
+
+                let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
+                // let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
+                // let args = Value::deserialize(&mut iter)?;
+
+                if command == "deleteStream" {
+                    debug!("command: deleteStream");
+                    break;
+                }
+            }
+
+            (_, MessageType::Command) => {
+                let mut iter = msg.payload.iter().copied();
+
+                let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
+                let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
+                let args = Value::deserialize(&mut iter)?;
+
+                debug!(?command, ?transmission_id, ?args);
+            }
+
+            (State::Running, MessageType::VideoPacket) => {
+                if msg.header.timestamp < last_video_timestamp {
+                    continue;
+                }
+
+                last_video_timestamp = msg.header.timestamp;
+
+                let mut tag = Vec::new();
+
+                // TagType
+                tag.push(MessageType::VideoPacket.into());
+                // DataSize
+                let len = (msg.payload.len() as u32).to_be_bytes();
+                tag.extend([len[1], len[2], len[3]]);
+                // Timestamp
+                let timestamp = msg.header.timestamp.to_be_bytes();
+                tag.extend([timestamp[1], timestamp[2], timestamp[3], timestamp[0]]);
+                // StreamID
+                tag.extend([0, 0, 0]);
+                // Data
+                tag.extend(&msg.payload);
+
+                file.write_all(&tag)?;
+                file.write_all(&(tag.len() as u32).to_be_bytes())?;
+            }
+
+            (State::Running, MessageType::AudioPacket) => {
+                if msg.header.timestamp < last_audio_timestamp {
+                    continue;
+                }
+
+                last_audio_timestamp = msg.header.timestamp;
+
+                let mut tag = Vec::new();
+
+                // TagType
+                tag.push(MessageType::AudioPacket.into());
+                // DataSize
+                let len = (msg.payload.len() as u32).to_be_bytes();
+                tag.extend([len[1], len[2], len[3]]);
+                // Timestamp
+                let timestamp = msg.header.timestamp.to_be_bytes();
+                tag.extend([timestamp[1], timestamp[2], timestamp[3], timestamp[0]]);
+                // StreamID
+                tag.extend([0, 0, 0]);
+                // Data
+                tag.extend(&msg.payload);
+
+                file.write_all(&tag)?;
+                file.write_all(&(tag.len() as u32).to_be_bytes())?;
+            }
+
             _ => {
                 // debug!(
                 //     stream = msg.header.stream_id,
                 //     type = ?msg.header.message_type,
                 //     size = msg.header.payload_length,
                 // );
-
-                if msg.header.message_type == MessageType::Data {
-                    let mut iter = msg.payload.iter().copied();
-
-                    let data = Sequence::deserialize(&mut iter)?;
-
-                    debug!("{data:#?}");
-                }
             }
         }
     }
@@ -301,7 +393,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
     //     let mut iter = chunk.content.iter().copied();
     // }
 
-    // Ok(())
+    Ok(())
 }
 
 fn handle(mut stream: TcpStream) -> Result<()> {
