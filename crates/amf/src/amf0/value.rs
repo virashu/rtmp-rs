@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, anyhow};
 
-use crate::amf0::{AmfObject, constants::types, number::AmfNumber, string::AmfString};
+use crate::amf0::{
+    AmfEcmaArray, AmfObject, constants::types, number::AmfNumber, string::AmfString,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -9,7 +11,7 @@ pub enum Value {
     String(AmfString),
     Object(AmfObject),
     Null,
-    EcmaArray,
+    EcmaArray(AmfEcmaArray),
     ObjectEnd,
     StrictArray,
     Date,
@@ -26,12 +28,21 @@ impl Value {
 
         match value_type {
             types::NUMBER => AmfNumber::deserialize(iter).map(Self::Number),
+            types::BOOLEAN => {
+                let value = iter.next().context("Not enough items")?;
+                match value {
+                    0x00 => Ok(Self::Boolean(false)),
+                    0x01 => Ok(Self::Boolean(true)),
+                    _ => Err(anyhow!("Invalid boolean value")),
+                }
+            }
             types::STRING => AmfString::deserialize(iter).map(Self::String),
             types::OBJECT => AmfObject::deserialize(iter).map(Self::Object),
             types::NULL => Ok(Self::Null),
+            types::ECMA_ARRAY => AmfEcmaArray::deserialize(iter).map(Self::EcmaArray),
             types::OBJECT_END => Ok(Self::ObjectEnd),
 
-            t => Err(anyhow::anyhow!("Unhandled type: {t}")),
+            t => Err(anyhow!("AMF Value Deserialize Error: Unhandled type: {t}")),
         }
     }
 

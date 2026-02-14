@@ -1,11 +1,13 @@
 pub mod constants;
 
+mod ecma_array;
 mod number;
 mod object;
 mod sequence;
 mod string;
 mod value;
 
+pub use ecma_array::AmfEcmaArray;
 pub use number::AmfNumber;
 pub use object::AmfObject;
 pub use sequence::Sequence;
