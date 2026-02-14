@@ -123,8 +123,9 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
 
                 let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
 
-                // let args = Value::deserialize(&mut iter)?.as_object()?.to_hashmap();
-                // debug!(?args);
+                let args = Value::deserialize(&mut iter)?.as_object()?.to_hashmap();
+
+                debug!(?args, "command: connect:");
 
                 // OUT: `Window Acknowledgement Size`
                 conn.send(
@@ -195,7 +196,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                 match command.as_ref() {
                     "createStream" => {
                         let args = Value::deserialize(&mut iter)?;
-                        debug!(?args, "createStream");
+                        debug!(?args, "command: createStream:");
 
                         // OUT: _result
                         {
@@ -227,7 +228,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
                         let publishing_type =
                             Value::deserialize(&mut iter)?.as_string()?.to_string();
 
-                        debug!(?publishing_name, ?publishing_type, "publish");
+                        debug!(?publishing_name, ?publishing_type, "command: publish:");
 
                         // OUT: onStatus
                         {
@@ -277,11 +278,19 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             //     debug!(?command, ?transmission_id, ?args);
             // }
             _ => {
-                debug!(
-                    stream = msg.header.stream_id,
-                    type = ?msg.header.message_type,
-                    size = msg.header.payload_length,
-                );
+                // debug!(
+                //     stream = msg.header.stream_id,
+                //     type = ?msg.header.message_type,
+                //     size = msg.header.payload_length,
+                // );
+
+                if msg.header.message_type == MessageType::Data {
+                    let mut iter = msg.payload.iter().copied();
+
+                    let data = Sequence::deserialize(&mut iter)?;
+
+                    debug!("{data:#?}");
+                }
             }
         }
     }
