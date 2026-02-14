@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, btree_map::Entry},
-    io::Read,
-};
+use std::collections::{BTreeMap, btree_map::Entry};
 
 use anyhow::Result;
 
@@ -61,16 +58,18 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub fn read_from(stream: &mut impl Read) -> Result<Self> {
-        let header = ChunkHeader::read_from(stream)?;
-        let mut content =
-            vec![0u8; header.message_header.message_length.unwrap_or_default() as usize];
+    pub fn deserialize(iter: &mut impl Iterator<Item = u8>) -> Result<Self> {
+        let header = ChunkHeader::deserialize(iter)?;
 
-        stream.read_exact(&mut content)?;
+        let payload = iter
+            .take(
+                header
+                    .chunk_message_header
+                    .message_length()
+                    .unwrap_or_default() as usize,
+            )
+            .collect();
 
-        Ok(Self {
-            header,
-            payload: content.into_boxed_slice(),
-        })
+        Ok(Self { header, payload })
     }
 }

@@ -1,5 +1,5 @@
 use std::{
-    io::{Read, Write},
+    io::{BufReader, Read, Write},
     net::TcpStream,
 };
 
@@ -9,7 +9,7 @@ use tracing::trace;
 use crate::{
     chunk::{
         ChunkStreamManager,
-        header::{ChunkBasicHeader, ChunkHeader, ChunkHeaderType, ChunkMessageHeader},
+        header::{ChunkHeader, ChunkMessageHeader},
     },
     constants::DEFAULT_MAX_CHUNK_PAYLOAD_SIZE,
     message::{Message, MessageHeader},
@@ -19,15 +19,15 @@ pub struct ConnectionConfig {
     pub max_chunk_payload_size: u32,
 }
 
-pub struct Connection<'s> {
+pub struct Connection<'s, S: Read + Write> {
     pub config: ConnectionConfig,
 
-    stream: &'s mut TcpStream,
+    stream: &'s mut S,
     chunking_state: ChunkStreamManager,
 }
 
-impl<'s> Connection<'s> {
-    pub fn new(stream: &'s mut TcpStream) -> Self {
+impl<'s, R: Read + Write> Connection<'s, R> {
+    pub fn new(stream: &'s mut R) -> Self {
         Self {
             config: ConnectionConfig {
                 max_chunk_payload_size: DEFAULT_MAX_CHUNK_PAYLOAD_SIZE,
@@ -39,16 +39,17 @@ impl<'s> Connection<'s> {
 
     fn receive_one_chunk(&mut self) -> Result<Option<Message>> {
         let _span = tracing::info_span!("inbound::chunk").entered();
+        let iter = &mut self.stream.bytes().filter_map(Result::ok);
 
-        let chunk_header = ChunkHeader::read_from(self.stream)?;
-        let chunk_stream_id = chunk_header.basic_header.chunk_stream_id;
+        let chunk_header = ChunkHeader::deserialize(iter)?;
+        let chunk_stream_id = chunk_header.chunk_stream_id;
 
         let chunk_metadata = self.chunking_state.get_mut(chunk_stream_id);
 
-        let chunk_message_header = chunk_header.message_header;
+        let chunk_message_header = chunk_header.chunk_message_header;
 
         let message_type = chunk_message_header
-            .message_type
+            .message_type()
             .inspect(|value| {
                 chunk_metadata.message_type = Some(*value);
             })
@@ -56,7 +57,7 @@ impl<'s> Connection<'s> {
             .context("No message type ID")?;
 
         let message_payload_length = chunk_message_header
-            .message_length
+            .message_length()
             .inspect(|value| {
                 chunk_metadata.message_payload_length = Some(*value);
             })
@@ -64,7 +65,7 @@ impl<'s> Connection<'s> {
             .context("No payload length")?;
 
         let message_timestamp = chunk_message_header
-            .timestamp
+            .timestamp()
             .inspect(|value| {
                 chunk_metadata.message_timestamp =
                     Some(*value + chunk_metadata.message_timestamp.unwrap_or(0));
@@ -73,7 +74,7 @@ impl<'s> Connection<'s> {
             .context("No timestamp")?;
 
         let message_stream_id = chunk_message_header
-            .message_stream_id
+            .message_stream_id()
             .inspect(|value| {
                 chunk_metadata.message_stream_id = Some(*value);
             })
@@ -134,15 +135,12 @@ impl<'s> Connection<'s> {
 
         if message.header.payload_length <= self.config.max_chunk_payload_size {
             let chunk_header = ChunkHeader {
-                basic_header: ChunkBasicHeader {
-                    chunk_header_type: ChunkHeaderType::Type0,
-                    chunk_stream_id,
-                },
-                message_header: ChunkMessageHeader {
-                    timestamp: Some(message.header.timestamp),
-                    message_length: Some(message.header.payload_length),
-                    message_type: Some(message.header.message_type),
-                    message_stream_id: Some(message.header.stream_id),
+                chunk_stream_id,
+                chunk_message_header: ChunkMessageHeader::Type0 {
+                    timestamp: message.header.timestamp,
+                    message_length: message.header.payload_length,
+                    message_type: message.header.message_type,
+                    message_stream_id: message.header.stream_id,
                 },
             };
             let header_raw = chunk_header.serialize();
@@ -157,15 +155,12 @@ impl<'s> Connection<'s> {
                 .chunks(self.config.max_chunk_payload_size as usize);
 
             let chunk_header = ChunkHeader {
-                basic_header: ChunkBasicHeader {
-                    chunk_header_type: ChunkHeaderType::Type0,
-                    chunk_stream_id,
-                },
-                message_header: ChunkMessageHeader {
-                    timestamp: Some(message.header.timestamp),
-                    message_length: Some(message.header.payload_length),
-                    message_type: Some(message.header.message_type),
-                    message_stream_id: Some(message.header.stream_id),
+                chunk_stream_id,
+                chunk_message_header: ChunkMessageHeader::Type0 {
+                    timestamp: message.header.timestamp,
+                    message_length: message.header.payload_length,
+                    message_type: message.header.message_type,
+                    message_stream_id: message.header.stream_id,
                 },
             };
             let header_raw = chunk_header.serialize();
@@ -175,16 +170,8 @@ impl<'s> Connection<'s> {
 
             for part in split {
                 let chunk_header = ChunkHeader {
-                    basic_header: ChunkBasicHeader {
-                        chunk_header_type: ChunkHeaderType::Type3,
-                        chunk_stream_id,
-                    },
-                    message_header: ChunkMessageHeader {
-                        timestamp: None,
-                        message_length: None,
-                        message_type: None,
-                        message_stream_id: None,
-                    },
+                    chunk_stream_id,
+                    chunk_message_header: ChunkMessageHeader::Type3,
                 };
                 let header_raw = chunk_header.serialize();
 
