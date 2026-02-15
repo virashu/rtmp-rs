@@ -1,9 +1,6 @@
-use std::{
-    io::{BufReader, Read, Write},
-    net::TcpStream,
-};
+use std::io::{Read, Write};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use tracing::trace;
 
 use crate::{
@@ -12,7 +9,7 @@ use crate::{
         header::{ChunkHeader, ChunkMessageHeader},
     },
     constants::DEFAULT_MAX_CHUNK_PAYLOAD_SIZE,
-    message::{Message, MessageHeader},
+    message::Message,
 };
 
 pub struct ConnectionConfig {
@@ -99,19 +96,21 @@ impl<'s, R: Read + Write> Connection<'s, R> {
             bail!("Read too much!");
         }
 
-        let message_header = MessageHeader {
-            message_type,
-            payload_length: message_payload_length,
-            timestamp: message_timestamp,
-            stream_id: message_stream_id,
-        };
+        // let message_header = MessageHeader {
+        //     message_type,
+        //     payload_length: message_payload_length,
+        //     timestamp: message_timestamp,
+        //     stream_id: message_stream_id,
+        // };
 
+        // Flush buffer
         let payload = chunk_metadata.buffer.split_off(0).into_boxed_slice();
 
-        Ok(Some(Message {
-            header: message_header,
-            payload,
-        }))
+        let message = Message::new(message_type, message_timestamp, message_stream_id, &payload)?;
+
+        ensure!(message_payload_length == message.header().payload_length);
+
+        Ok(Some(message))
     }
 
     pub fn recv(&mut self) -> Result<Message> {
@@ -133,42 +132,33 @@ impl<'s, R: Read + Write> Connection<'s, R> {
     pub fn send(&mut self, chunk_stream_id: u32, message: Message) -> Result<()> {
         let _span = tracing::info_span!("outbound").entered();
 
-        if message.header.payload_length <= self.config.max_chunk_payload_size {
-            let chunk_header = ChunkHeader {
-                chunk_stream_id,
-                chunk_message_header: ChunkMessageHeader::Type0 {
-                    timestamp: message.header.timestamp,
-                    message_length: message.header.payload_length,
-                    message_type: message.header.message_type,
-                    message_stream_id: message.header.stream_id,
-                },
-            };
-            let header_raw = chunk_header.serialize();
+        let message_header = message.header();
 
-            self.send_raw(&header_raw)?;
-            self.send_raw(&message.payload)?;
+        let chunk_header = ChunkHeader {
+            chunk_stream_id,
+            chunk_message_header: ChunkMessageHeader::Type0 {
+                timestamp: message_header.timestamp,
+                message_length: message_header.payload_length,
+                message_type: message_header.message_type,
+                message_stream_id: message_header.stream_id,
+            },
+        };
+        trace!(?chunk_header);
 
-            trace!(header = header_raw, payload = message.payload);
+        self.send_raw(&chunk_header.serialize())?;
+
+        if message_header.payload_length <= self.config.max_chunk_payload_size {
+            self.send_raw(message.payload())?;
         } else {
-            let mut split = message
-                .payload
-                .chunks(self.config.max_chunk_payload_size as usize);
+            let (first, rest) = message
+                .payload()
+                .split_at(self.config.max_chunk_payload_size as usize);
 
-            let chunk_header = ChunkHeader {
-                chunk_stream_id,
-                chunk_message_header: ChunkMessageHeader::Type0 {
-                    timestamp: message.header.timestamp,
-                    message_length: message.header.payload_length,
-                    message_type: message.header.message_type,
-                    message_stream_id: message.header.stream_id,
-                },
-            };
-            let header_raw = chunk_header.serialize();
+            self.send_raw(first)?;
 
-            self.send_raw(&header_raw)?;
-            self.send_raw(split.next().unwrap())?;
+            let parts = rest.chunks(self.config.max_chunk_payload_size as usize);
 
-            for part in split {
+            for part in parts {
                 let chunk_header = ChunkHeader {
                     chunk_stream_id,
                     chunk_message_header: ChunkMessageHeader::Type3,

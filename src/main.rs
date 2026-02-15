@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Result, bail, ensure};
+use flv::tag::FlvTag;
 use tracing::{debug, info};
 
 use amf::amf0::{AmfObject, Sequence, Value};
@@ -103,7 +104,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
         .create(true)
         .truncate(true)
         .write(true)
-        .open("video.flv")?;
+        .open("runtime/video.flv")?;
     write_header(&mut file)?;
 
     // conn.config.max_chunk_payload_size = 128;
@@ -111,11 +112,11 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
     loop {
         let msg = conn.recv()?;
 
-        match (state, msg.header.message_type) {
+        match (state, msg.header().message_type) {
             (State::BeforeConnect, MessageType::SetChunkSize) => {
                 // IN
                 {
-                    let raw_value: [u8; 4] = msg.payload.as_ref().try_into()?;
+                    let raw_value: [u8; 4] = msg.payload().as_ref().try_into()?;
                     let value = u32::from_be_bytes(raw_value);
                     conn.config.max_chunk_payload_size = value;
                     info!("The client set a chunk size limit: {value} Bytes");
@@ -139,7 +140,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             (State::BeforeConnect, MessageType::Command) => {
                 // IN: `Command Message (connect)`
 
-                let mut iter = msg.payload.iter().copied();
+                let mut iter = msg.payload().iter().copied();
 
                 let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
                 ensure!(command == "connect", "Unexpected command");
@@ -211,7 +212,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             }
 
             (State::BeforePublish, MessageType::Command) => {
-                let mut iter = msg.payload.iter().copied();
+                let mut iter = msg.payload().iter().copied();
 
                 let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
                 let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
@@ -294,7 +295,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             }
 
             (State::BeforeMetadata, MessageType::Data) => {
-                let mut iter = msg.payload.iter().copied();
+                let mut iter = msg.payload().iter().copied();
 
                 let data = Sequence::deserialize(&mut iter)?;
                 debug!("{data:#?}");
@@ -303,7 +304,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             }
 
             (State::Running, MessageType::Command) => {
-                let mut iter = msg.payload.iter().copied();
+                let mut iter = msg.payload().iter().copied();
 
                 let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
                 // let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
@@ -316,7 +317,7 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             }
 
             (_, MessageType::Command) => {
-                let mut iter = msg.payload.iter().copied();
+                let mut iter = msg.payload().iter().copied();
 
                 let command = Value::deserialize(&mut iter)?.as_string()?.to_string();
                 let transmission_id = Value::deserialize(&mut iter)?.as_number()?.to_float();
@@ -326,55 +327,32 @@ fn connect(stream: &mut TcpStream) -> Result<()> {
             }
 
             (State::Running, MessageType::VideoPacket) => {
-                if msg.header.timestamp < last_video_timestamp {
+                let timestamp = msg.header().timestamp;
+
+                if timestamp < last_video_timestamp {
                     continue;
                 }
+                last_video_timestamp = timestamp;
 
-                last_video_timestamp = msg.header.timestamp;
+                let tag = FlvTag::new(MessageType::VideoPacket.into(), timestamp, msg.payload())?;
 
-                let mut tag = Vec::new();
-
-                // TagType
-                tag.push(MessageType::VideoPacket.into());
-                // DataSize
-                let len = (msg.payload.len() as u32).to_be_bytes();
-                tag.extend([len[1], len[2], len[3]]);
-                // Timestamp
-                let timestamp = msg.header.timestamp.to_be_bytes();
-                tag.extend([timestamp[1], timestamp[2], timestamp[3], timestamp[0]]);
-                // StreamID
-                tag.extend([0, 0, 0]);
-                // Data
-                tag.extend(&msg.payload);
-
-                file.write_all(&tag)?;
-                file.write_all(&(tag.len() as u32).to_be_bytes())?;
+                file.write_all(&tag.serialize())?;
+                file.write_all(&(tag.size() as u32).to_be_bytes())?;
             }
 
             (State::Running, MessageType::AudioPacket) => {
-                if msg.header.timestamp < last_audio_timestamp {
+                let timestamp = msg.header().timestamp;
+
+                if timestamp < last_audio_timestamp {
                     continue;
                 }
 
-                last_audio_timestamp = msg.header.timestamp;
+                last_audio_timestamp = timestamp;
 
-                let mut tag = Vec::new();
+                let tag = FlvTag::new(MessageType::AudioPacket.into(), timestamp, msg.payload())?;
 
-                // TagType
-                tag.push(MessageType::AudioPacket.into());
-                // DataSize
-                let len = (msg.payload.len() as u32).to_be_bytes();
-                tag.extend([len[1], len[2], len[3]]);
-                // Timestamp
-                let timestamp = msg.header.timestamp.to_be_bytes();
-                tag.extend([timestamp[1], timestamp[2], timestamp[3], timestamp[0]]);
-                // StreamID
-                tag.extend([0, 0, 0]);
-                // Data
-                tag.extend(&msg.payload);
-
-                file.write_all(&tag)?;
-                file.write_all(&(tag.len() as u32).to_be_bytes())?;
+                file.write_all(&tag.serialize())?;
+                file.write_all(&(tag.size() as u32).to_be_bytes())?;
             }
 
             _ => {

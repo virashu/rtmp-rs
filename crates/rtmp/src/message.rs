@@ -8,8 +8,8 @@ pub use self::header::MessageHeader;
 
 #[derive(Debug)]
 pub struct Message {
-    pub header: MessageHeader,
-    pub payload: Box<[u8]>,
+    header: MessageHeader,
+    payload: Box<[u8]>,
 }
 
 impl Message {
@@ -34,6 +34,14 @@ impl Message {
             },
             payload: Box::from(payload),
         })
+    }
+
+    pub fn header(&self) -> &MessageHeader {
+        &self.header
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
     }
 }
 
@@ -68,7 +76,10 @@ pub mod control_message {
         .unwrap()
     }
 
-    pub fn user_control_message(event: UserControlMessageEvent, event_data: &[u8]) -> Result<Message> {
+    pub fn user_control_message(
+        event: UserControlMessageEvent,
+        event_data: &[u8],
+    ) -> Result<Message> {
         let mut bytes = vec![];
         bytes.extend((event as u16).to_be_bytes());
         bytes.extend(event_data);
