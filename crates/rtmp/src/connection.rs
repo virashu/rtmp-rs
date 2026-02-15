@@ -16,14 +16,14 @@ pub struct ConnectionConfig {
     pub max_chunk_payload_size: u32,
 }
 
-pub struct Connection<'s, S: Read + Write> {
+pub struct NetConnection<'s, S: Read + Write> {
     pub config: ConnectionConfig,
 
     stream: &'s mut S,
     chunking_state: ChunkStreamManager,
 }
 
-impl<'s, R: Read + Write> Connection<'s, R> {
+impl<'s, R: Read + Write> NetConnection<'s, R> {
     pub fn new(stream: &'s mut R) -> Self {
         Self {
             config: ConnectionConfig {
@@ -34,6 +34,14 @@ impl<'s, R: Read + Write> Connection<'s, R> {
         }
     }
 
+    /// Read one chunk from stream.
+    ///
+    /// - Returns `Ok(Some(message))`
+    ///   if a full message can be formed from collected chunks.
+    ///
+    /// - Returns `Ok(None)`
+    ///   if a chunk was read but no full message can be formed.
+    ///
     fn receive_one_chunk(&mut self) -> Result<Option<Message>> {
         let _span = tracing::info_span!("inbound::chunk").entered();
         let iter = &mut self.stream.bytes().filter_map(Result::ok);
@@ -95,13 +103,6 @@ impl<'s, R: Read + Write> Connection<'s, R> {
         if chunk_metadata.buffer.len() > message_payload_length as usize {
             bail!("Read too much!");
         }
-
-        // let message_header = MessageHeader {
-        //     message_type,
-        //     payload_length: message_payload_length,
-        //     timestamp: message_timestamp,
-        //     stream_id: message_stream_id,
-        // };
 
         // Flush buffer
         let payload = chunk_metadata.buffer.split_off(0).into_boxed_slice();

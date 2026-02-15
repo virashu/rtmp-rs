@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 amf = { path = "../amf" }
+flv = { path = "../flv" }
 
 anyhow = "1.0.100"
 tracing = "0.1.44"
