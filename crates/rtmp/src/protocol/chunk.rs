@@ -4,7 +4,7 @@ use anyhow::Result;
 
 pub mod header;
 
-use crate::message_type::MessageType;
+use crate::protocol::message_type::MessageType;
 
 use self::header::ChunkHeader;
 

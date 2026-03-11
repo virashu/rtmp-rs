@@ -3,7 +3,7 @@ use std::convert::TryFrom;
 use anyhow::{Context, Ok, Result};
 use itertools::Itertools;
 
-use crate::message_type::MessageType;
+use crate::protocol::message_type::MessageType;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ChunkMessageHeaderType {

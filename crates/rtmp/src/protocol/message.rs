@@ -1,8 +1,8 @@
-use anyhow::{Result, ensure};
+use anyhow::{ensure, Result};
 
 mod header;
 
-use crate::message_type::MessageType;
+use crate::protocol::message_type::MessageType;
 
 pub use self::header::MessageHeader;
 
@@ -46,8 +46,8 @@ impl Message {
 }
 
 pub mod control_message {
-    use crate::{constants::CONTROL_MESSAGE_STREAM_ID, event::UserControlMessageEvent};
-
+    use crate::constants::CONTROL_MESSAGE_STREAM_ID;
+    use crate::protocol::event::UserControlMessageEvent;
     use super::*;
 
     #[allow(clippy::unwrap_used, reason = "checked input")]

@@ -36,7 +36,6 @@ fn main() -> Result<()> {
 
     server.on_data(|client_id, data| {
         let mut file = OpenOptions::new()
-            .create(true)
             .append(true)
             .open(format!("runtime/{client_id}.flv"))
             .expect("Failed to open file");

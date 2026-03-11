@@ -1,16 +1,14 @@
 use std::io::{Read, Write};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use tracing::trace;
 
-use crate::{
-    chunk::{
-        ChunkStreamManager,
-        header::{ChunkHeader, ChunkMessageHeader},
-    },
-    constants::DEFAULT_MAX_CHUNK_PAYLOAD_SIZE,
-    message::Message,
+use crate::constants::DEFAULT_MAX_CHUNK_PAYLOAD_SIZE;
+use crate::protocol::chunk::{
+    header::{ChunkHeader, ChunkMessageHeader},
+    ChunkStreamManager,
 };
+use crate::protocol::message::Message;
 
 pub struct ConnectionConfig {
     pub max_chunk_payload_size: u32,
@@ -23,8 +21,8 @@ pub struct NetConnection<'s, S: Read + Write> {
     chunking_state: ChunkStreamManager,
 }
 
-impl<'s, R: Read + Write> NetConnection<'s, R> {
-    pub fn new(stream: &'s mut R) -> Self {
+impl<'s, S: Read + Write> NetConnection<'s, S> {
+    pub fn new(stream: &'s mut S) -> Self {
         Self {
             config: ConnectionConfig {
                 max_chunk_payload_size: DEFAULT_MAX_CHUNK_PAYLOAD_SIZE,

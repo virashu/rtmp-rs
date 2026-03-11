@@ -1,6 +1,6 @@
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use flv::tag::FlvTag;
 use tracing::{debug, info};
 
@@ -9,10 +9,10 @@ use amf::amf0::{AmfObject, Sequence, Value};
 use crate::{
     connection::NetConnection,
     constants::{CONTROL_CHUNK_STREAM_ID, CONTROL_MESSAGE_STREAM_ID},
-    event::UserControlMessageEvent,
-    message::{Message, control_message},
-    message_type::MessageType,
 };
+use crate::protocol::event::UserControlMessageEvent;
+use crate::protocol::message::{control_message, Message};
+use crate::protocol::message_type::MessageType;
 
 mod functions;
 

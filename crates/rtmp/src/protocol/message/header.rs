@@ -1,4 +1,4 @@
-use crate::message_type::MessageType;
+use crate::protocol::message_type::MessageType;
 
 #[derive(Debug)]
 pub struct MessageHeader {
